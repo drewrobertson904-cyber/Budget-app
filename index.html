@@ -172,20 +172,10 @@
   <div class="card">
     <div class="card-header">
       <div class="card-title">Fixed Expenses</div>
-      <div class="pill">Auto-filled</div>
+      <div class="pill">Carries Forward</div>
     </div>
-    <div class="row-fixed">
-      <div class="fixed-label">Mortgage</div>
-      <div class="amount-wrap"><input type="number" id="exp-mortgage" value="2585" oninput="save(); calcAll()"></div>
-    </div>
-    <div class="row-fixed">
-      <div class="fixed-label">Car Payment</div>
-      <div class="amount-wrap"><input type="number" id="exp-car" value="364" oninput="save(); calcAll()"></div>
-    </div>
-    <div class="row-fixed">
-      <div class="fixed-label">Health Insurance</div>
-      <div class="amount-wrap"><input type="number" id="exp-health" value="850" oninput="save(); calcAll()"></div>
-    </div>
+    <div id="fixed-rows"></div>
+    <button class="btn-add" onclick="addFixedRow()">+ Add Fixed Expense</button>
     <div class="section-total">Fixed Total: <strong id="fixed-total">$0.00</strong></div>
   </div>
 
@@ -288,7 +278,11 @@ function freshMonth() {
       { label: 'Source 2', amount: '' },
       { label: 'Source 3', amount: '' }
     ],
-    fixed: { mortgage: 2585, car: 364, health: 850 },
+    fixed: [
+      { label: 'Mortgage', amount: '2585' },
+      { label: 'Car Payment', amount: '364' },
+      { label: 'Health Insurance', amount: '850' }
+    ],
     personal: [{ label: '', amount: '' }],
     business: [{ label: '', amount: '' }]
   };
@@ -318,9 +312,9 @@ function newMonth() {
   const key = `${ny}-${String(nm).padStart(2,'0')}`;
   if (allData[key]) { alert('That month already exists.'); return; }
   allData[key] = freshMonth();
-  // Carry over fixed values from last month
+  // Carry over fixed rows from last month
   if (allData[latest] && allData[latest].fixed) {
-    allData[key].fixed = { ...allData[latest].fixed };
+    allData[key].fixed = JSON.parse(JSON.stringify(allData[latest].fixed));
   }
   saveAll();
   buildMonthSelect();
@@ -332,10 +326,17 @@ function loadMonth(key) {
   currentMonth = key;
   const d = allData[key];
   if (!d) return;
+  // Migrate old fixed object format to array
+  if (d.fixed && !Array.isArray(d.fixed)) {
+    d.fixed = [
+      { label: 'Mortgage', amount: String(d.fixed.mortgage || 2585) },
+      { label: 'Car Payment', amount: String(d.fixed.car || 364) },
+      { label: 'Health Insurance', amount: String(d.fixed.health || 850) }
+    ];
+    saveAll();
+  }
   renderRevenue(d.revenue || []);
-  document.getElementById('exp-mortgage').value = d.fixed?.mortgage ?? 2585;
-  document.getElementById('exp-car').value = d.fixed?.car ?? 364;
-  document.getElementById('exp-health').value = d.fixed?.health ?? 850;
+  renderFixedRows(d.fixed || []);
   renderExpenseRows('personal', d.personal || []);
   renderExpenseRows('business', d.business || []);
   calcAll();
@@ -367,6 +368,34 @@ function addRevenueRow() {
 function delRevRow(idx) {
   allData[currentMonth].revenue.splice(idx, 1);
   saveAll(); renderRevenue(allData[currentMonth].revenue); calcAll();
+}
+
+// Fixed Expenses
+function renderFixedRows(rows) {
+  const cont = document.getElementById('fixed-rows');
+  cont.innerHTML = '';
+  rows.forEach((r, i) => cont.appendChild(makeFixedRow(r.label, r.amount, i)));
+}
+
+function makeFixedRow(label, amount, idx) {
+  const div = document.createElement('div');
+  div.className = 'row';
+  div.innerHTML = `
+    <input type="text" placeholder="Expense name" value="${esc(label)}" oninput="save();calcAll()">
+    <div class="amount-wrap"><input type="number" placeholder="0.00" value="${esc(amount)}" oninput="save();calcAll()"></div>
+    <button class="btn-del" onclick="delFixedRow(${idx})">×</button>
+  `;
+  return div;
+}
+
+function addFixedRow() {
+  allData[currentMonth].fixed.push({ label: '', amount: '' });
+  saveAll(); renderFixedRows(allData[currentMonth].fixed); calcAll();
+}
+
+function delFixedRow(idx) {
+  allData[currentMonth].fixed.splice(idx, 1);
+  saveAll(); renderFixedRows(allData[currentMonth].fixed); calcAll();
 }
 
 // Expenses
@@ -405,11 +434,10 @@ function save() {
     const inp = row.querySelectorAll('input');
     return { label: inp[0].value, amount: inp[1].value };
   });
-  d.fixed = {
-    mortgage: parseFloat(document.getElementById('exp-mortgage').value) || 0,
-    car: parseFloat(document.getElementById('exp-car').value) || 0,
-    health: parseFloat(document.getElementById('exp-health').value) || 0
-  };
+  d.fixed = [...document.querySelectorAll('#fixed-rows .row')].map(row => {
+    const inp = row.querySelectorAll('input');
+    return { label: inp[0].value, amount: inp[1].value };
+  });
   d.personal = readRows('personal');
   d.business = readRows('business');
   saveAll();
@@ -434,10 +462,10 @@ function calcAll() {
   });
   document.getElementById('rev-total').textContent = fmt(rev);
 
-  const mortgage = parseFloat(document.getElementById('exp-mortgage').value) || 0;
-  const car = parseFloat(document.getElementById('exp-car').value) || 0;
-  const health = parseFloat(document.getElementById('exp-health').value) || 0;
-  const fixed = mortgage + car + health;
+  let fixed = 0;
+  document.querySelectorAll('#fixed-rows .row').forEach(row => {
+    fixed += parseFloat(row.querySelectorAll('input')[1].value) || 0;
+  });
   document.getElementById('fixed-total').textContent = fmt(fixed);
 
   let personal = 0;
@@ -487,7 +515,7 @@ function renderHistory() {
   list.innerHTML = months.map(key => {
     const d = allData[key];
     const rev = sumAmts(d.revenue);
-    const fixed = (d.fixed?.mortgage||0)+(d.fixed?.car||0)+(d.fixed?.health||0);
+    const fixed = sumAmts(d.fixed);
     const personal = sumAmts(d.personal);
     const business = sumAmts(d.business);
     const saved = rev - fixed - personal - business;
